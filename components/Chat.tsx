@@ -2,7 +2,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Send, ImagePlus, Heart, Loader2 } from 'lucide-react';
-import { io, Socket } from 'socket.io-client';
+import { createClient } from '@supabase/supabase-js';
+
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL || '';
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 interface Message {
     id: number;
@@ -21,7 +25,6 @@ const Chat: React.FC<ChatProps> = ({ userName }) => {
     const [input, setInput] = useState('');
     const [isUploading, setIsUploading] = useState(false);
     const [isConnected, setIsConnected] = useState(false);
-    const socketRef = useRef<Socket | null>(null);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -29,49 +32,86 @@ const Chat: React.FC<ChatProps> = ({ userName }) => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
     };
 
+    // Load initial messages
     useEffect(() => {
-        const socket = io('/', { path: '/socket.io' });
-        socketRef.current = socket;
+        const loadMessages = async () => {
+            const { data, error } = await supabase
+                .from('Message')
+                .select('*')
+                .order('createdAt', { ascending: true })
+                .limit(50);
 
-        socket.on('connect', () => setIsConnected(true));
-        socket.on('disconnect', () => setIsConnected(false));
+            if (data) {
+                setMessages(data);
+                setTimeout(scrollToBottom, 100);
+            }
+            if (error) console.error('Load error:', error);
+        };
 
-        socket.on('init', (msgs: Message[]) => {
-            setMessages(msgs);
-            setTimeout(scrollToBottom, 100);
-        });
+        loadMessages();
 
-        socket.on('message', (msg: Message) => {
-            setMessages((prev) => [...prev, msg]);
-            setTimeout(scrollToBottom, 100);
-        });
+        // Subscribe to new messages via Supabase Realtime
+        const channel = supabase
+            .channel('chat-messages')
+            .on(
+                'postgres_changes',
+                { event: 'INSERT', schema: 'public', table: 'Message' },
+                (payload) => {
+                    const newMsg = payload.new as Message;
+                    setMessages((prev) => {
+                        // Avoid duplicates
+                        if (prev.some((m) => m.id === newMsg.id)) return prev;
+                        return [...prev, newMsg];
+                    });
+                    setTimeout(scrollToBottom, 100);
+                }
+            )
+            .subscribe((status) => {
+                setIsConnected(status === 'SUBSCRIBED');
+            });
 
         return () => {
-            socket.disconnect();
+            supabase.removeChannel(channel);
         };
     }, []);
 
-    const sendMessage = () => {
-        if (!input.trim() || !socketRef.current) return;
-        socketRef.current.emit('message', { text: input.trim(), sender: userName });
+    const sendMessage = async () => {
+        if (!input.trim()) return;
+        const text = input.trim();
         setInput('');
+
+        const { error } = await supabase.from('Message').insert({
+            text,
+            sender: userName,
+        });
+
+        if (error) console.error('Send error:', error);
     };
 
     const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
-        if (!file || !socketRef.current) return;
+        if (!file) return;
 
         setIsUploading(true);
         try {
-            const formData = new FormData();
-            formData.append('image', file);
+            const fileName = `${Date.now()}-${file.name}`;
+            const { error: uploadError } = await supabase.storage
+                .from('chat-images')
+                .upload(fileName, file, { contentType: file.type });
 
-            const res = await fetch('/api/upload', { method: 'POST', body: formData });
-            const data = await res.json();
-
-            if (data.url) {
-                socketRef.current.emit('message', { imageUrl: data.url, sender: userName });
+            if (uploadError) {
+                console.error('Upload error:', uploadError);
+                return;
             }
+
+            const { data: urlData } = supabase.storage
+                .from('chat-images')
+                .getPublicUrl(fileName);
+
+            await supabase.from('Message').insert({
+                imageUrl: urlData.publicUrl,
+                sender: userName,
+            });
         } catch (err) {
             console.error('Upload failed:', err);
         } finally {
@@ -98,7 +138,7 @@ const Chat: React.FC<ChatProps> = ({ userName }) => {
                 <div className="flex items-center justify-center gap-2">
                     <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-green-400' : 'bg-red-400'}`}></span>
                     <p className="text-gray-400 text-xs">
-                        {isConnected ? 'Connected with love 💕' : 'Reconnecting...'}
+                        {isConnected ? 'Connected with love 💕' : 'Connecting...'}
                     </p>
                 </div>
             </div>
@@ -162,7 +202,6 @@ const Chat: React.FC<ChatProps> = ({ userName }) => {
 
             {/* Input Area */}
             <div className="flex items-center gap-2 bg-white/80 backdrop-blur-md rounded-full px-4 py-2 shadow-lg border border-pink-100">
-                {/* Image Upload */}
                 <input
                     ref={fileInputRef}
                     type="file"
@@ -182,7 +221,6 @@ const Chat: React.FC<ChatProps> = ({ userName }) => {
                     )}
                 </button>
 
-                {/* Text Input */}
                 <input
                     type="text"
                     placeholder="Say something sweet…"
@@ -192,7 +230,6 @@ const Chat: React.FC<ChatProps> = ({ userName }) => {
                     className="flex-1 bg-transparent outline-none text-gray-700 placeholder:text-pink-300 py-2"
                 />
 
-                {/* Send */}
                 <button
                     onClick={sendMessage}
                     disabled={!input.trim()}
