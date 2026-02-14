@@ -23,7 +23,7 @@ const App: React.FC = () => {
   // Background music (optional auto-play can be added here)
 
   const handleLogin = () => {
-    const validNames = ['shfq', 'sfq', 'shafaque', 'shafq'];
+    const validNames = ['shfq', 'sfq', 'shafaque', 'shafq', 'aayan', 'Aayan', 'Shafaque', 'Shafaque Meraj'];
     const validPassword = '301220';
 
     if (validNames.includes(userName.toLowerCase().trim()) && password === validPassword) {
