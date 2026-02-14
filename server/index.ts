@@ -3,11 +3,15 @@ import { createServer } from 'http';
 import { Server } from 'socket.io';
 import cors from 'cors';
 import multer from 'multer';
-import { PrismaClient } from '@prisma/client';
-import { supabase } from './supabaseAdmin.js';
 import dotenv from 'dotenv';
+import { PrismaClient } from '../prisma/generated/prisma/client.js';
+import { PrismaPg } from '@prisma/adapter-pg';
+import { supabase } from './supabaseAdmin.js';
 
 dotenv.config();
+
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL! });
+const prisma = new PrismaClient({ adapter });
 
 const app = express();
 const httpServer = createServer(app);
@@ -15,7 +19,6 @@ const io = new Server(httpServer, {
     cors: { origin: '*' },
 });
 
-const prisma = new PrismaClient();
 const upload = multer({ storage: multer.memoryStorage() });
 
 app.use(cors());
